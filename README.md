@@ -1,18 +1,16 @@
 
 ## Datasets
-
+Vowel Database by James Hillenbrand (https://homepages.wmich.edu/~hillenbr/voweldata.html)
 ## File Structure
 ```bash
 .
 ├── README.md 
-├── main.ipynb                               # The main jupyterNotebook to show the graphs
-├── health.py                                # Code to predict and visualize health data
-├── economy.py                               # Code to predict and visualize economy data
-├── world_overall.py                         # Code to predict and visualize overall world data for the categories
-├── environment.py                           # Code to predict and visualize environment data
-├── output_images                            # Where all the graphs are stored
+├── main.ipynb                               # Contains all main code segments for loading, pre-processing, and using data for training classifiers
+├── data_processing.py                       # Contains functions for pre-processing data and getting WPD coefficients
+├── extra_functions.py                       # Contains functions for PCA and for simplifying k-fold cross validation
+├── txt files                                # contain data and metadata for dataset. processed with functions from data_processing.py
 ├── .gitignore
-└── ECE_143_Is_world_better_place.pdf        # Our presentation slides
+└── 
 ```
 ## How to run the code
-here is how
+main.py consists of code segments that can be used to train and perform different types of classification. Wrapper and assisting functions are included in data_processing and extra_functions. Do not simply run main.py in console. Instead, use the simple code blocks within it to construct whatever program you may need. Ideally just run lines from console.
