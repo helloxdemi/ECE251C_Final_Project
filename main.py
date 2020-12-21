@@ -5,25 +5,15 @@ import matplotlib.colors as colors
 plt.style.use('seaborn-deep')
 import seaborn as sns
 import sklearn as skl
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedKFold
 from sklearn.svm import SVC
-from sklearn.preprocessing import StandardScaler
 from keras import optimizers
 from keras.models import Sequential, load_model
 from keras.layers.core import Dense, Activation, Flatten, Dropout
 from keras.utils import np_utils
-from keras.utils import normalize
-import scipy
-import cv2
-import scipy.signal as signal
-from scipy.io import wavfile
-import pandas as pd
-import glob
 from extra_functions import *
-import scipy.fft as fft
 from data_processing import *
 import pywt
 
@@ -58,7 +48,8 @@ NUM_VOWELS = 12
 # Processing and loading data #
 time_df, vow_df, vow_stats_df, data_df = get_dataframes(crop_silence=True)
 
-svm_data, YL = get_formatted_data(data_df, 'm')
+# Example of using get_formatted_data function #
+svm_data, YL = get_formatted_data(data_df, 'all')
 
 
 # general method for getting STFT coefficients #
@@ -66,7 +57,12 @@ win_len = 128
 f, t, Zxx = signal.stft(svm_data, Fs, window='bartlett', nperseg=win_len, noverlap=win_len // 2,
                         nfft=win_len, return_onesided=True, boundary='zeros', padded=True, axis=1)
 Z_stft = np.abs(Zxx) ** 2
+
+# plt.figure(dpi=300)
+# plt.pcolormesh(t, f, np.abs(Zxx[0, :, :]) ** 2, cmap='viridis', shading='nearest')  # used to plot spectrogram
 Z_stft = np.reshape(Z_stft, (Z_stft.shape[0], Z_stft.shape[1] * Z_stft.shape[2]), order='C')
+Z_stft = Z_stft / np.max(Z_stft, axis=0)
+Z_stft = Z_stft - np.mean(Z_stft, axis=0)
 
 
 #  some random useful functions for CWT stuff  #
@@ -90,42 +86,38 @@ coeffs_vec, coeffs_slices = pywt.coeffs_to_array(coeffs, axes=[1])
 coeffs_vec = np.abs(coeffs_vec) ** 2
 
 
-#  first attempt at training SVM with STFT coefficients (note: no normalization of coefficients or k fold CV)  #
-svm_data, YL = get_formatted_data(data_df, group='w')
+#  Training SVM with STFT coefficients
+for constant in [1]:  # placeholder if you want to loop some variable within the loop (e.g. one of the WPD levels)
+  win_len = 128
+    f, t, Zxx = signal.stft(svm_data, Fs, window='bartlett', nperseg=win_len, noverlap=win_len // 2,
+                            nfft=win_len, return_onesided=True, boundary='zeros', padded=True, axis=1)
 
-win_len = 256 // 2
-f, t, Zxx = signal.stft(svm_data, Fs, window='bartlett', nperseg=win_len, noverlap=win_len // 2,
-                        nfft=win_len, return_onesided=True, boundary='zeros', padded=True, axis=1)
+    Z_stft = np.abs(Zxx[:, :1 + win_len//4 + win_len//16, :]) ** 2
+    Z_stft = np.reshape(Z_stft, (Z_stft.shape[0], Z_stft.shape[1] * Z_stft.shape[2]), order='C')
+    Z_stft = Z_stft / np.max(Z_stft, axis=0)
+    Z_stft = Z_stft - np.mean(Z_stft, axis=0)
 
-Z_stft = np.abs(Zxx) ** 2
-Z_stft = np.reshape(Z_stft, (Z_stft.shape[0], Z_stft.shape[1] * Z_stft.shape[2]), order='C')
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=3)
+    skf.get_n_splits(coeffs_vec, YL)
 
-x_train, x_validation, y_train, y_validation = train_test_split(Z_stft, YL, train_size=0.8, stratify=YL)
+    scores = [[] for x in range(5)]
+    for p, indices in enumerate(skf.split(coeffs_vec, YL)):
+        x_train, y_train, x_validation, y_validation = get_kfolds(coeffs_vec, YL, indices)
+        U, mu = PCA(x_train)  # Using 100-300 PCs is good (For both DWT and STFT)
 
-clf = SVC(gamma='scale', kernel='rbf', degree=1, C=3.0)
-clf.fit(x_train, y_train)
-score = clf.score(x_validation, y_validation)
-print(score)
-
-test = clf.decision_function(x_validation)
-predictions = np.argmax(test, axis=1)
-
-
-svm_data, YL = get_formatted_data(data_df, group='adults')
-
-win_len = 128
-f, t, Zxx = signal.stft(svm_data, Fs, window='bartlett', nperseg=win_len, noverlap=win_len // 2,
-                        nfft=win_len, return_onesided=True, boundary='zeros', padded=True, axis=1)
-# plt.figure(dpi=300)
-# plt.pcolormesh(t, f, np.abs(Zxx[0, :, :]) ** 2, cmap='viridis', shading='nearest')
-
-Z_stft = np.abs(Zxx[:, :1 + win_len//4 + win_len//16, :]) ** 2
-Z_stft = np.reshape(Z_stft, (Z_stft.shape[0], Z_stft.shape[1] * Z_stft.shape[2]), order='C')
-Z_stft = Z_stft / np.max(Z_stft, axis=0)
-Z_stft = Z_stft - np.mean(Z_stft, axis=0)
-coeffs_vec = Z_stft
-
-
+        for n in range(10, 500, 10):
+            Z_train, Ul_train = apply_PCA_from_Eig(x_train, U, n, mu)
+            Z_validation, Ul_validation = apply_PCA_from_Eig(x_validation, U, n, mu)
+            clf = SVC(gamma='scale', kernel='poly', degree=1, C=3.0)  # C=3.0 for poly 1, C=3.0 for rbf, sigmoid bad
+            clf.fit(Z_train, y_train)
+            score = clf.score(Z_validation, y_validation)
+            scores[p].append(score)
+        print('Finished fold %d' % (p+1))
+    scores_mean = np.mean(np.asarray(scores), axis=0)
+    print(scores_mean)
+    
+    
+#  Training SVM with WPD coefficients
 for constant in [1]:  # placeholder if you want to loop some variable within the loop (e.g. on of the WPD levels)
     coeffs_vec = get_WPD_coeffs(svm_data, levels=[6, 5, 4, 4, 4], wavelet='db10', extension_mode='zero')
     coeffs_vec = np.abs(coeffs_vec) ** 2
@@ -151,9 +143,6 @@ for constant in [1]:  # placeholder if you want to loop some variable within the
     scores_mean = np.mean(np.asarray(scores), axis=0)
     print(scores_mean)
 
-test = clf.decision_function(x_validation)
-predictions = np.argmax(test, axis=1)
-
 
 y_predict = clf.predict(x_validation)  # this and one below are for finding confusion matrix
 
@@ -167,12 +156,11 @@ plt.xticks(rotation=0)
 plt.yticks(rotation=0)
 
 
-boy_data, YL = get_formatted_data(data_df, group='all')
-
 svm_data, YL = get_formatted_data(data_df, group='all')
 
 
-win_len = 32  # Interestingly, 128 performs better than 256
+# Everything below is for NN training #
+win_len = 128  # Interestingly, 128 performs better than 256
 f, t, Zxx = signal.stft(svm_data, Fs, window='bartlett', nperseg=win_len, noverlap=win_len // 2,
                         nfft=win_len, return_onesided=True, boundary='zeros', padded=True, axis=1)
 
@@ -182,9 +170,7 @@ Z_stft = Z_stft / np.max(Z_stft, axis=0)
 Z_stft = Z_stft - np.mean(Z_stft, axis=0)
 coeffs_vec = Z_stft
 
-# coeffs = pywt.wavedecn(svm_data, wavelet='db10', mode='zero', level=6, axes=1)
-# coeffs_vec, coeffs_slices = pywt.coeffs_to_array(coeffs, axes=[1])
-
+# Definition for NN architecture #
 def baseline_model(INPUT_LENGTH, NUM_CLASSES, optimizer=1, layer1=256, layer2=128):
     # Create model
     model = Sequential()
